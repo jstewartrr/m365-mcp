@@ -1,6 +1,6 @@
 """
-Microsoft 365 MCP Server - ABBI's M365 Integration
-Provides email, calendar, and user management via Microsoft Graph API
+Microsoft 365 MCP Server v2 - Full Email Management
+Provides comprehensive email, calendar, and user management via Microsoft Graph API
 """
 
 from flask import Flask, request, jsonify
@@ -70,6 +70,7 @@ def graph_request(method, endpoint, user=None, **kwargs):
 # ============ MCP PROTOCOL ============
 
 TOOLS = [
+    # === EMAIL READING ===
     {
         "name": "read_emails",
         "description": "Read emails from inbox. Returns subject, from, date, and preview.",
@@ -77,9 +78,10 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "user": {"type": "string", "description": "User mailbox (default: John.Claude@middleground.com)"},
-                "folder": {"type": "string", "description": "Folder name (default: inbox)"},
+                "folder": {"type": "string", "description": "Folder name or ID (default: inbox)"},
                 "top": {"type": "integer", "description": "Number of emails to return (default: 10)"},
                 "unread_only": {"type": "boolean", "description": "Only return unread emails"},
+                "flagged_only": {"type": "boolean", "description": "Only return flagged emails"},
                 "search": {"type": "string", "description": "Search query"}
             }
         }
@@ -97,6 +99,21 @@ TOOLS = [
         }
     },
     {
+        "name": "search_emails",
+        "description": "Search emails across mailbox",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User mailbox"},
+                "query": {"type": "string", "description": "Search query (KQL syntax)"},
+                "top": {"type": "integer", "description": "Max results (default: 25)"}
+            },
+            "required": ["query"]
+        }
+    },
+    
+    # === EMAIL SENDING ===
+    {
         "name": "send_email",
         "description": "Send an email from the specified user",
         "inputSchema": {
@@ -105,9 +122,11 @@ TOOLS = [
                 "user": {"type": "string", "description": "Send as this user (default: John.Claude@middleground.com)"},
                 "to": {"type": "array", "items": {"type": "string"}, "description": "Recipient email addresses"},
                 "cc": {"type": "array", "items": {"type": "string"}, "description": "CC recipients"},
+                "bcc": {"type": "array", "items": {"type": "string"}, "description": "BCC recipients"},
                 "subject": {"type": "string", "description": "Email subject"},
                 "body": {"type": "string", "description": "Email body (HTML or plain text)"},
-                "is_html": {"type": "boolean", "description": "Body is HTML (default: false)"}
+                "is_html": {"type": "boolean", "description": "Body is HTML (default: false)"},
+                "importance": {"type": "string", "enum": ["low", "normal", "high"], "description": "Email importance"}
             },
             "required": ["to", "subject", "body"]
         }
@@ -127,18 +146,194 @@ TOOLS = [
         }
     },
     {
-        "name": "search_emails",
-        "description": "Search emails across mailbox",
+        "name": "forward_email",
+        "description": "Forward an email to other recipients",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "user": {"type": "string", "description": "User mailbox"},
-                "query": {"type": "string", "description": "Search query (KQL syntax)"},
-                "top": {"type": "integer", "description": "Max results (default: 25)"}
+                "message_id": {"type": "string", "description": "Message ID to forward"},
+                "to": {"type": "array", "items": {"type": "string"}, "description": "Recipients to forward to"},
+                "comment": {"type": "string", "description": "Optional comment to add"}
             },
-            "required": ["query"]
+            "required": ["message_id", "to"]
         }
     },
+    
+    # === EMAIL MANAGEMENT ===
+    {
+        "name": "flag_email",
+        "description": "Flag or unflag an email for follow-up",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User mailbox"},
+                "message_id": {"type": "string", "description": "Email message ID"},
+                "flag_status": {"type": "string", "enum": ["flagged", "complete", "notFlagged"], "description": "Flag status"}
+            },
+            "required": ["message_id", "flag_status"]
+        }
+    },
+    {
+        "name": "mark_read",
+        "description": "Mark email(s) as read or unread",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User mailbox"},
+                "message_ids": {"type": "array", "items": {"type": "string"}, "description": "Email message IDs"},
+                "is_read": {"type": "boolean", "description": "True to mark as read, False for unread"}
+            },
+            "required": ["message_ids", "is_read"]
+        }
+    },
+    {
+        "name": "move_email",
+        "description": "Move email(s) to a different folder",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User mailbox"},
+                "message_ids": {"type": "array", "items": {"type": "string"}, "description": "Email message IDs to move"},
+                "destination_folder": {"type": "string", "description": "Destination folder name or ID (e.g., 'archive', 'deleteditems', or folder ID)"}
+            },
+            "required": ["message_ids", "destination_folder"]
+        }
+    },
+    {
+        "name": "delete_email",
+        "description": "Delete email(s) - moves to Deleted Items or permanently deletes",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User mailbox"},
+                "message_ids": {"type": "array", "items": {"type": "string"}, "description": "Email message IDs to delete"},
+                "permanent": {"type": "boolean", "description": "Permanently delete (skip Deleted Items)"}
+            },
+            "required": ["message_ids"]
+        }
+    },
+    {
+        "name": "copy_email",
+        "description": "Copy email(s) to another folder",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User mailbox"},
+                "message_ids": {"type": "array", "items": {"type": "string"}, "description": "Email message IDs to copy"},
+                "destination_folder": {"type": "string", "description": "Destination folder name or ID"}
+            },
+            "required": ["message_ids", "destination_folder"]
+        }
+    },
+    
+    # === FOLDER MANAGEMENT ===
+    {
+        "name": "list_folders",
+        "description": "List all mail folders",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User mailbox"},
+                "include_hidden": {"type": "boolean", "description": "Include hidden folders"}
+            }
+        }
+    },
+    {
+        "name": "create_folder",
+        "description": "Create a new mail folder",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User mailbox"},
+                "name": {"type": "string", "description": "Folder name"},
+                "parent_folder": {"type": "string", "description": "Parent folder ID (optional, default is root)"}
+            },
+            "required": ["name"]
+        }
+    },
+    {
+        "name": "delete_folder",
+        "description": "Delete a mail folder",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User mailbox"},
+                "folder_id": {"type": "string", "description": "Folder ID to delete"}
+            },
+            "required": ["folder_id"]
+        }
+    },
+    {
+        "name": "rename_folder",
+        "description": "Rename a mail folder",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User mailbox"},
+                "folder_id": {"type": "string", "description": "Folder ID"},
+                "new_name": {"type": "string", "description": "New folder name"}
+            },
+            "required": ["folder_id", "new_name"]
+        }
+    },
+    
+    # === MAIL RULES ===
+    {
+        "name": "list_rules",
+        "description": "List all inbox rules",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User mailbox"}
+            }
+        }
+    },
+    {
+        "name": "create_rule",
+        "description": "Create an inbox rule",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User mailbox"},
+                "name": {"type": "string", "description": "Rule name"},
+                "conditions": {"type": "object", "description": "Rule conditions (e.g., from_addresses, subject_contains)"},
+                "actions": {"type": "object", "description": "Rule actions (e.g., move_to_folder, mark_as_read, flag)"},
+                "enabled": {"type": "boolean", "description": "Enable rule (default: true)"}
+            },
+            "required": ["name", "conditions", "actions"]
+        }
+    },
+    {
+        "name": "update_rule",
+        "description": "Update an existing inbox rule",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User mailbox"},
+                "rule_id": {"type": "string", "description": "Rule ID to update"},
+                "name": {"type": "string", "description": "New rule name"},
+                "conditions": {"type": "object", "description": "New conditions"},
+                "actions": {"type": "object", "description": "New actions"},
+                "enabled": {"type": "boolean", "description": "Enable/disable rule"}
+            },
+            "required": ["rule_id"]
+        }
+    },
+    {
+        "name": "delete_rule",
+        "description": "Delete an inbox rule",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User mailbox"},
+                "rule_id": {"type": "string", "description": "Rule ID to delete"}
+            },
+            "required": ["rule_id"]
+        }
+    },
+    
+    # === CALENDAR ===
     {
         "name": "list_calendar_events",
         "description": "List calendar events for a date range",
@@ -171,6 +366,35 @@ TOOLS = [
         }
     },
     {
+        "name": "update_event",
+        "description": "Update a calendar event",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User calendar"},
+                "event_id": {"type": "string", "description": "Event ID"},
+                "subject": {"type": "string", "description": "New title"},
+                "start": {"type": "string", "description": "New start datetime"},
+                "end": {"type": "string", "description": "New end datetime"},
+                "location": {"type": "string", "description": "New location"},
+                "body": {"type": "string", "description": "New description"}
+            },
+            "required": ["event_id"]
+        }
+    },
+    {
+        "name": "delete_event",
+        "description": "Delete a calendar event",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user": {"type": "string", "description": "User calendar"},
+                "event_id": {"type": "string", "description": "Event ID to delete"}
+            },
+            "required": ["event_id"]
+        }
+    },
+    {
         "name": "get_availability",
         "description": "Check free/busy availability for users",
         "inputSchema": {
@@ -183,6 +407,8 @@ TOOLS = [
             "required": ["emails", "start", "end"]
         }
     },
+    
+    # === USERS ===
     {
         "name": "list_users",
         "description": "List users in the organization",
@@ -210,15 +436,17 @@ TOOLS = [
 
 # ============ TOOL IMPLEMENTATIONS ============
 
-def read_emails(user=None, folder="inbox", top=10, unread_only=False, search=None):
+def read_emails(user=None, folder="inbox", top=10, unread_only=False, flagged_only=False, search=None):
     """Read emails from inbox"""
     user = user or DEFAULT_USER
-    params = [f"$top={top}", "$select=id,subject,from,receivedDateTime,bodyPreview,isRead"]
+    params = [f"$top={top}", "$select=id,subject,from,receivedDateTime,bodyPreview,isRead,flag,importance"]
     params.append("$orderby=receivedDateTime desc")
     
     filters = []
     if unread_only:
         filters.append("isRead eq false")
+    if flagged_only:
+        filters.append("flag/flagStatus eq 'flagged'")
     if search:
         params.append(f"$search=\"{search}\"")
     if filters:
@@ -237,7 +465,9 @@ def read_emails(user=None, folder="inbox", top=10, unread_only=False, search=Non
                 "from_name": m.get("from", {}).get("emailAddress", {}).get("name", ""),
                 "date": m.get("receivedDateTime"),
                 "preview": m.get("bodyPreview", "")[:200],
-                "is_read": m.get("isRead", False)
+                "is_read": m.get("isRead", False),
+                "flag_status": m.get("flag", {}).get("flagStatus", "notFlagged"),
+                "importance": m.get("importance", "normal")
             } for m in result["value"]]
         }
     return result
@@ -246,7 +476,7 @@ def read_emails(user=None, folder="inbox", top=10, unread_only=False, search=Non
 def get_email(message_id, user=None):
     """Get full email by ID"""
     user = user or DEFAULT_USER
-    endpoint = f"/messages/{message_id}?$select=id,subject,from,toRecipients,ccRecipients,receivedDateTime,body,hasAttachments"
+    endpoint = f"/messages/{message_id}?$select=id,subject,from,toRecipients,ccRecipients,receivedDateTime,body,hasAttachments,flag,importance,isRead"
     result = graph_request("GET", endpoint, user=user)
     
     if "id" in result:
@@ -258,12 +488,15 @@ def get_email(message_id, user=None):
             "cc": [r.get("emailAddress", {}) for r in result.get("ccRecipients", [])],
             "date": result.get("receivedDateTime"),
             "body": result.get("body", {}).get("content", ""),
-            "has_attachments": result.get("hasAttachments", False)
+            "has_attachments": result.get("hasAttachments", False),
+            "is_read": result.get("isRead", False),
+            "flag_status": result.get("flag", {}).get("flagStatus", "notFlagged"),
+            "importance": result.get("importance", "normal")
         }
     return result
 
 
-def send_email(to, subject, body, user=None, cc=None, is_html=False):
+def send_email(to, subject, body, user=None, cc=None, bcc=None, is_html=False, importance="normal"):
     """Send an email"""
     user = user or DEFAULT_USER
     
@@ -274,12 +507,15 @@ def send_email(to, subject, body, user=None, cc=None, is_html=False):
                 "contentType": "HTML" if is_html else "Text",
                 "content": body
             },
-            "toRecipients": [{"emailAddress": {"address": addr}} for addr in to]
+            "toRecipients": [{"emailAddress": {"address": addr}} for addr in to],
+            "importance": importance
         }
     }
     
     if cc:
         message["message"]["ccRecipients"] = [{"emailAddress": {"address": addr}} for addr in cc]
+    if bcc:
+        message["message"]["bccRecipients"] = [{"emailAddress": {"address": addr}} for addr in bcc]
     
     result = graph_request("POST", "/sendMail", user=user, json=message)
     return {"success": True, "message": f"Email sent to {', '.join(to)}"}
@@ -296,10 +532,24 @@ def reply_email(message_id, body, user=None, reply_all=False):
     return {"success": True, "action": action}
 
 
+def forward_email(message_id, to, user=None, comment=None):
+    """Forward an email"""
+    user = user or DEFAULT_USER
+    
+    body = {
+        "toRecipients": [{"emailAddress": {"address": addr}} for addr in to]
+    }
+    if comment:
+        body["comment"] = comment
+    
+    result = graph_request("POST", f"/messages/{message_id}/forward", user=user, json=body)
+    return {"success": True, "message": f"Email forwarded to {', '.join(to)}"}
+
+
 def search_emails(query, user=None, top=25):
     """Search emails"""
     user = user or DEFAULT_USER
-    endpoint = f"/messages?$search=\"{query}\"&$top={top}&$select=id,subject,from,receivedDateTime,bodyPreview"
+    endpoint = f"/messages?$search=\"{query}\"&$top={top}&$select=id,subject,from,receivedDateTime,bodyPreview,isRead,flag"
     result = graph_request("GET", endpoint, user=user)
     
     if "value" in result:
@@ -310,10 +560,282 @@ def search_emails(query, user=None, top=25):
                 "subject": m.get("subject", "(no subject)"),
                 "from": m.get("from", {}).get("emailAddress", {}).get("address", "unknown"),
                 "date": m.get("receivedDateTime"),
-                "preview": m.get("bodyPreview", "")[:200]
+                "preview": m.get("bodyPreview", "")[:200],
+                "is_read": m.get("isRead", False),
+                "flag_status": m.get("flag", {}).get("flagStatus", "notFlagged")
             } for m in result["value"]]
         }
     return result
+
+
+def flag_email(message_id, flag_status, user=None):
+    """Flag or unflag an email"""
+    user = user or DEFAULT_USER
+    
+    body = {
+        "flag": {
+            "flagStatus": flag_status
+        }
+    }
+    
+    result = graph_request("PATCH", f"/messages/{message_id}", user=user, json=body)
+    return {"success": True, "message_id": message_id, "flag_status": flag_status}
+
+
+def mark_read(message_ids, is_read, user=None):
+    """Mark emails as read or unread"""
+    user = user or DEFAULT_USER
+    results = []
+    
+    for msg_id in message_ids:
+        result = graph_request("PATCH", f"/messages/{msg_id}", user=user, json={"isRead": is_read})
+        results.append({"message_id": msg_id, "success": "error" not in result})
+    
+    return {
+        "success": True,
+        "marked_as": "read" if is_read else "unread",
+        "count": len(message_ids),
+        "results": results
+    }
+
+
+def move_email(message_ids, destination_folder, user=None):
+    """Move emails to a folder"""
+    user = user or DEFAULT_USER
+    
+    # Map common folder names to well-known folder names
+    folder_map = {
+        "inbox": "inbox",
+        "archive": "archive", 
+        "deleted": "deleteditems",
+        "deleteditems": "deleteditems",
+        "trash": "deleteditems",
+        "drafts": "drafts",
+        "sent": "sentitems",
+        "sentitems": "sentitems",
+        "junk": "junkemail",
+        "junkemail": "junkemail",
+        "spam": "junkemail"
+    }
+    
+    folder_id = folder_map.get(destination_folder.lower(), destination_folder)
+    results = []
+    
+    for msg_id in message_ids:
+        result = graph_request("POST", f"/messages/{msg_id}/move", user=user, json={"destinationId": folder_id})
+        results.append({"message_id": msg_id, "success": "id" in result or "success" in result})
+    
+    return {
+        "success": True,
+        "moved_to": destination_folder,
+        "count": len(message_ids),
+        "results": results
+    }
+
+
+def delete_email(message_ids, user=None, permanent=False):
+    """Delete emails"""
+    user = user or DEFAULT_USER
+    results = []
+    
+    for msg_id in message_ids:
+        if permanent:
+            result = graph_request("DELETE", f"/messages/{msg_id}", user=user)
+        else:
+            result = graph_request("POST", f"/messages/{msg_id}/move", user=user, json={"destinationId": "deleteditems"})
+        results.append({"message_id": msg_id, "success": True})
+    
+    return {
+        "success": True,
+        "deleted": "permanently" if permanent else "moved to trash",
+        "count": len(message_ids),
+        "results": results
+    }
+
+
+def copy_email(message_ids, destination_folder, user=None):
+    """Copy emails to a folder"""
+    user = user or DEFAULT_USER
+    results = []
+    
+    for msg_id in message_ids:
+        result = graph_request("POST", f"/messages/{msg_id}/copy", user=user, json={"destinationId": destination_folder})
+        results.append({"message_id": msg_id, "new_id": result.get("id"), "success": "id" in result})
+    
+    return {
+        "success": True,
+        "copied_to": destination_folder,
+        "count": len(message_ids),
+        "results": results
+    }
+
+
+def list_folders(user=None, include_hidden=False):
+    """List mail folders"""
+    user = user or DEFAULT_USER
+    params = "$select=id,displayName,parentFolderId,childFolderCount,unreadItemCount,totalItemCount"
+    if not include_hidden:
+        params += "&$filter=isHidden eq false"
+    
+    endpoint = f"/mailFolders?{params}"
+    result = graph_request("GET", endpoint, user=user)
+    
+    if "value" in result:
+        return {
+            "count": len(result["value"]),
+            "folders": [{
+                "id": f["id"],
+                "name": f.get("displayName"),
+                "parent_id": f.get("parentFolderId"),
+                "child_count": f.get("childFolderCount", 0),
+                "unread_count": f.get("unreadItemCount", 0),
+                "total_count": f.get("totalItemCount", 0)
+            } for f in result["value"]]
+        }
+    return result
+
+
+def create_folder(name, user=None, parent_folder=None):
+    """Create a mail folder"""
+    user = user or DEFAULT_USER
+    
+    if parent_folder:
+        endpoint = f"/mailFolders/{parent_folder}/childFolders"
+    else:
+        endpoint = "/mailFolders"
+    
+    result = graph_request("POST", endpoint, user=user, json={"displayName": name})
+    
+    if "id" in result:
+        return {"success": True, "folder_id": result["id"], "name": result.get("displayName")}
+    return result
+
+
+def delete_folder(folder_id, user=None):
+    """Delete a mail folder"""
+    user = user or DEFAULT_USER
+    result = graph_request("DELETE", f"/mailFolders/{folder_id}", user=user)
+    return {"success": True, "folder_id": folder_id}
+
+
+def rename_folder(folder_id, new_name, user=None):
+    """Rename a mail folder"""
+    user = user or DEFAULT_USER
+    result = graph_request("PATCH", f"/mailFolders/{folder_id}", user=user, json={"displayName": new_name})
+    return {"success": True, "folder_id": folder_id, "new_name": new_name}
+
+
+def list_rules(user=None):
+    """List inbox rules"""
+    user = user or DEFAULT_USER
+    endpoint = "/mailFolders/inbox/messageRules"
+    result = graph_request("GET", endpoint, user=user)
+    
+    if "value" in result:
+        return {
+            "count": len(result["value"]),
+            "rules": [{
+                "id": r["id"],
+                "name": r.get("displayName"),
+                "sequence": r.get("sequence"),
+                "enabled": r.get("isEnabled", True),
+                "conditions": r.get("conditions", {}),
+                "actions": r.get("actions", {})
+            } for r in result["value"]]
+        }
+    return result
+
+
+def create_rule(name, conditions, actions, user=None, enabled=True):
+    """Create an inbox rule"""
+    user = user or DEFAULT_USER
+    
+    # Build conditions
+    rule_conditions = {}
+    if "from_addresses" in conditions:
+        rule_conditions["fromAddresses"] = [{"emailAddress": {"address": addr}} for addr in conditions["from_addresses"]]
+    if "subject_contains" in conditions:
+        rule_conditions["subjectContains"] = conditions["subject_contains"] if isinstance(conditions["subject_contains"], list) else [conditions["subject_contains"]]
+    if "body_contains" in conditions:
+        rule_conditions["bodyContains"] = conditions["body_contains"] if isinstance(conditions["body_contains"], list) else [conditions["body_contains"]]
+    if "sender_contains" in conditions:
+        rule_conditions["senderContains"] = conditions["sender_contains"] if isinstance(conditions["sender_contains"], list) else [conditions["sender_contains"]]
+    if "has_attachments" in conditions:
+        rule_conditions["hasAttachments"] = conditions["has_attachments"]
+    if "importance" in conditions:
+        rule_conditions["importance"] = conditions["importance"]
+    
+    # Build actions
+    rule_actions = {}
+    if "move_to_folder" in actions:
+        rule_actions["moveToFolder"] = actions["move_to_folder"]
+    if "copy_to_folder" in actions:
+        rule_actions["copyToFolder"] = actions["copy_to_folder"]
+    if "mark_as_read" in actions:
+        rule_actions["markAsRead"] = actions["mark_as_read"]
+    if "flag" in actions:
+        rule_actions["flagStatus"] = actions["flag"]
+    if "delete" in actions:
+        rule_actions["delete"] = actions["delete"]
+    if "forward_to" in actions:
+        rule_actions["forwardTo"] = [{"emailAddress": {"address": addr}} for addr in actions["forward_to"]]
+    if "stop_processing" in actions:
+        rule_actions["stopProcessingRules"] = actions["stop_processing"]
+    if "mark_importance" in actions:
+        rule_actions["markImportance"] = actions["mark_importance"]
+    
+    body = {
+        "displayName": name,
+        "isEnabled": enabled,
+        "conditions": rule_conditions,
+        "actions": rule_actions
+    }
+    
+    endpoint = "/mailFolders/inbox/messageRules"
+    result = graph_request("POST", endpoint, user=user, json=body)
+    
+    if "id" in result:
+        return {"success": True, "rule_id": result["id"], "name": result.get("displayName")}
+    return result
+
+
+def update_rule(rule_id, user=None, name=None, conditions=None, actions=None, enabled=None):
+    """Update an inbox rule"""
+    user = user or DEFAULT_USER
+    
+    body = {}
+    if name:
+        body["displayName"] = name
+    if enabled is not None:
+        body["isEnabled"] = enabled
+    if conditions:
+        # Same condition mapping as create_rule
+        rule_conditions = {}
+        if "from_addresses" in conditions:
+            rule_conditions["fromAddresses"] = [{"emailAddress": {"address": addr}} for addr in conditions["from_addresses"]]
+        if "subject_contains" in conditions:
+            rule_conditions["subjectContains"] = conditions["subject_contains"] if isinstance(conditions["subject_contains"], list) else [conditions["subject_contains"]]
+        body["conditions"] = rule_conditions
+    if actions:
+        # Same action mapping as create_rule
+        rule_actions = {}
+        if "move_to_folder" in actions:
+            rule_actions["moveToFolder"] = actions["move_to_folder"]
+        if "mark_as_read" in actions:
+            rule_actions["markAsRead"] = actions["mark_as_read"]
+        body["actions"] = rule_actions
+    
+    endpoint = f"/mailFolders/inbox/messageRules/{rule_id}"
+    result = graph_request("PATCH", endpoint, user=user, json=body)
+    return {"success": True, "rule_id": rule_id}
+
+
+def delete_rule(rule_id, user=None):
+    """Delete an inbox rule"""
+    user = user or DEFAULT_USER
+    endpoint = f"/mailFolders/inbox/messageRules/{rule_id}"
+    result = graph_request("DELETE", endpoint, user=user)
+    return {"success": True, "rule_id": rule_id}
 
 
 def list_calendar_events(user=None, start_date=None, end_date=None, top=50):
@@ -376,6 +898,33 @@ def create_event(subject, start, end, user=None, attendees=None, location=None, 
             "teams_url": result.get("onlineMeeting", {}).get("joinUrl") if is_online else None
         }
     return result
+
+
+def update_event(event_id, user=None, subject=None, start=None, end=None, location=None, body=None):
+    """Update a calendar event"""
+    user = user or DEFAULT_USER
+    
+    update = {}
+    if subject:
+        update["subject"] = subject
+    if start:
+        update["start"] = {"dateTime": start, "timeZone": "UTC"}
+    if end:
+        update["end"] = {"dateTime": end, "timeZone": "UTC"}
+    if location:
+        update["location"] = {"displayName": location}
+    if body:
+        update["body"] = {"contentType": "Text", "content": body}
+    
+    result = graph_request("PATCH", f"/events/{event_id}", user=user, json=update)
+    return {"success": True, "event_id": event_id}
+
+
+def delete_event(event_id, user=None):
+    """Delete a calendar event"""
+    user = user or DEFAULT_USER
+    result = graph_request("DELETE", f"/events/{event_id}", user=user)
+    return {"success": True, "event_id": event_id}
 
 
 def get_availability(emails, start, end):
@@ -473,9 +1022,25 @@ TOOL_MAP = {
     "get_email": get_email,
     "send_email": send_email,
     "reply_email": reply_email,
+    "forward_email": forward_email,
     "search_emails": search_emails,
+    "flag_email": flag_email,
+    "mark_read": mark_read,
+    "move_email": move_email,
+    "delete_email": delete_email,
+    "copy_email": copy_email,
+    "list_folders": list_folders,
+    "create_folder": create_folder,
+    "delete_folder": delete_folder,
+    "rename_folder": rename_folder,
+    "list_rules": list_rules,
+    "create_rule": create_rule,
+    "update_rule": update_rule,
+    "delete_rule": delete_rule,
     "list_calendar_events": list_calendar_events,
     "create_event": create_event,
+    "update_event": update_event,
+    "delete_event": delete_event,
     "get_availability": get_availability,
     "list_users": list_users,
     "get_user": get_user
@@ -492,6 +1057,7 @@ def health():
         return jsonify({
             "status": "healthy",
             "service": "m365-mcp",
+            "version": "2.0.0",
             "authenticated": True,
             "default_user": DEFAULT_USER,
             "tools": len(TOOLS)
@@ -512,7 +1078,7 @@ def mcp_handler():
             "id": data.get("id"),
             "result": {
                 "protocolVersion": "2024-11-05",
-                "serverInfo": {"name": "m365-mcp", "version": "1.0.0"},
+                "serverInfo": {"name": "m365-mcp", "version": "2.0.0"},
                 "capabilities": {"tools": {"listChanged": False}}
             }
         })
